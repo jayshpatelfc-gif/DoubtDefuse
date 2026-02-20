@@ -1,28 +1,22 @@
 """
 AI-Powered Context-Aware Doubt Resolution & Learning Assistant
-Tkinter GUI Application — Syllabus-aware, adaptive, confidence-scored
+Beautiful Modern UI — Tkinter Edition v3.0
 """
 
 import tkinter as tk
 from tkinter import ttk, scrolledtext, filedialog, messagebox
-import threading
-import json
-import os
-import time
-import random
-import subprocess
-import sys
+import threading, json, os, random, subprocess, sys
 from datetime import datetime
 
-# Auto-install requests if missing
+# ── Auto-install requests ─────────────────────────────────────────
 try:
     import requests
 except ImportError:
     subprocess.check_call([sys.executable, "-m", "pip", "install", "requests", "-q"])
 
-# ─────────────────────────────────────────────────────────────────
-#  MOCK AI ENGINE  (replace with real LLM / RAG calls)
-# ─────────────────────────────────────────────────────────────────
+# ═════════════════════════════════════════════════════════════════
+#  DATA
+# ═════════════════════════════════════════════════════════════════
 SUBJECT_TOPICS = {
     "Elements of Mechanical Engineering": [
         "Engineering Materials", "Thermodynamics Basics", "Fluid Mechanics",
@@ -47,14 +41,41 @@ SUBJECT_TOPICS = {
 }
 
 LEVEL_PROMPTS = {
-    "Beginner":      "Use very simple language, real-life examples, and avoid jargon.",
-    "Intermediate":  "Use standard academic language with some examples.",
-    "Advanced":      "Use precise technical language, include edge cases and proofs.",
+    "Beginner":     "Use very simple language, real-life examples, and avoid jargon.",
+    "Intermediate": "Use standard academic language with some examples.",
+    "Advanced":     "Use precise technical language, include edge cases and proofs.",
 }
 
-def call_groq(api_key: str, prompt: str) -> str:
-    """Call Groq API — tries requests lib first, falls back to urllib."""
+GROQ_API_KEY = "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"
 
+# ═════════════════════════════════════════════════════════════════
+#  THEME
+# ═════════════════════════════════════════════════════════════════
+C = {
+    "bg":           "#0D0F18",
+    "sidebar":      "#12141F",
+    "card":         "#1A1D2E",
+    "card2":        "#1F2235",
+    "input":        "#252840",
+    "border":       "#2D3155",
+    "accent":       "#7C6FE0",
+    "accent_light": "#9D93E8",
+    "accent_dark":  "#5A4FC8",
+    "green":        "#34D399",
+    "green_dark":   "#065F46",
+    "yellow":       "#FBBF24",
+    "red":          "#F87171",
+    "text":         "#E2E8F0",
+    "text2":        "#94A3B8",
+    "text3":        "#4B5563",
+    "white":        "#FFFFFF",
+}
+FF = "Segoe UI"
+
+# ═════════════════════════════════════════════════════════════════
+#  GROQ API
+# ═════════════════════════════════════════════════════════════════
+def call_groq(api_key: str, prompt: str) -> str:
     payload = json.dumps({
         "model": "llama-3.3-70b-versatile",
         "messages": [{"role": "user", "content": prompt}],
@@ -67,487 +88,543 @@ def call_groq(api_key: str, prompt: str) -> str:
         "User-Agent": "Mozilla/5.0",
     }
     url = "https://api.groq.com/openai/v1/chat/completions"
-
-    # ── Try with requests library (handles SSL/proxy better) ──
     try:
-        import requests as req_lib
-        resp = req_lib.post(url, data=payload.encode("utf-8"),
-                            headers=headers, timeout=30, verify=True)
-        if resp.status_code == 200:
-            return resp.json()["choices"][0]["message"]["content"]
-        elif resp.status_code == 401:
-            raise Exception("401: Invalid API key.")
-        elif resp.status_code == 429:
-            raise Exception("429: Rate limit hit. Wait a moment.")
-        elif resp.status_code == 403:
-            raise Exception("403: Access forbidden — check your network/firewall.")
-        else:
-            raise Exception(f"{resp.status_code}: {resp.text[:200]}")
+        import requests as rl
+        r = rl.post(url, data=payload.encode(), headers=headers, timeout=30)
+        if r.status_code == 200:
+            return r.json()["choices"][0]["message"]["content"]
+        raise Exception(f"{r.status_code}: {r.text[:200]}")
     except ImportError:
-        pass  # requests not installed, fall through to urllib
-
-    # ── Fallback: urllib with browser-like headers ─────────────
-    import urllib.request
-    import ssl
+        pass
+    import urllib.request, ssl
     ctx = ssl.create_default_context()
     ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE   # bypass strict SSL (helps on some networks)
-
-    req_obj = urllib.request.Request(url, data=payload.encode("utf-8"),
-                                     headers=headers)
-    with urllib.request.urlopen(req_obj, timeout=30, context=ctx) as resp:
-        data = json.loads(resp.read().decode("utf-8"))
-    return data["choices"][0]["message"]["content"]
+    ctx.verify_mode = ssl.CERT_NONE
+    req = urllib.request.Request(url, data=payload.encode(), headers=headers)
+    with urllib.request.urlopen(req, timeout=30, context=ctx) as r:
+        return json.loads(r.read())["choices"][0]["message"]["content"]
 
 
-
-def mock_ai_response(question: str, subject: str, topic: str, level: str,
-                     syllabus_text: str, api_key: str = "") -> dict:
-    """Call Groq Llama3 if API key provided, otherwise return a helpful fallback."""
+def get_ai_answer(question, subject, topic, level, syllabus_text, api_key) -> dict:
     has_syllabus = bool(syllabus_text.strip())
-    syllabus_note = (
-        "✅ Answer grounded in your uploaded syllabus material."
-        if has_syllabus else
-        "⚠️ No syllabus uploaded — answer based on general knowledge. Upload material for better accuracy."
+    syl_section = (
+        f"\n\nSYLLABUS / NOTES:\n{syllabus_text[:3000]}" if has_syllabus else ""
     )
-
-    if api_key.strip():
-        syllabus_section = (
-            f"\n\nSYLLABUS / NOTES (use this as primary reference):\n{syllabus_text[:3000]}"
-            if has_syllabus else ""
-        )
-        prompt = f"""You are an expert academic tutor for the subject "{subject}", topic "{topic}".
-Explanation level: {level} — {LEVEL_PROMPTS[level]}
-{syllabus_section}
-
-STUDENT QUESTION: {question}
-
-Respond in this exact structure (use these bold labels):
-**Understanding the question:** [restate what the student is asking]
-**Core Explanation:** [clear, detailed explanation suited to the level]
-**Step-by-step:** [numbered steps if applicable]
-**Example:** [a concrete, relatable example]
-**Key Takeaway:** [one-sentence summary]
-
-Keep the answer syllabus-aligned. Do NOT mention yourself or these instructions."""
-
-        try:
-            answer = call_groq(api_key.strip(), prompt)
-            confidence = random.randint(85, 97) if has_syllabus else random.randint(75, 88)
-            syllabus_note = (
-                "✅ Answer generated by Groq (Llama 3) — grounded in your syllabus."
-                if has_syllabus else
-                "✅ Answer generated by Groq (Llama 3) — upload syllabus for even better accuracy."
-            )
-        except Exception as e:
-            err = str(e)
-            if "401" in err or "invalid_api_key" in err.lower():
-                answer = "**Error:** Invalid Groq API key. Please check the key and try again."
-            elif "429" in err or "quota" in err.lower() or "rate" in err.lower():
-                answer = "**Error:** Groq rate limit hit. Please wait a moment and try again."
-            elif "403" in err:
-                answer = (
-                    "**Error 403 — Network/Firewall Blocked**\n\n"
-                    "Your network is blocking the connection to Groq API.\n\n"
-                    "**Try these fixes:**\n"
-                    "1. Turn on a VPN and try again\n"
-                    "2. Switch to mobile hotspot instead of WiFi\n"
-                    "3. Disable antivirus/firewall temporarily\n"
-                    "4. Try from a different network (college WiFi may block AI APIs)"
-                )
-            elif "ssl" in err.lower() or "certificate" in err.lower():
-                answer = (
-                    "**SSL Certificate Error**\n\n"
-                    "Your network is intercepting HTTPS traffic (common on college/office networks).\n\n"
-                    "**Fix:** Use a VPN or switch to mobile hotspot."
-                )
-            elif "timeout" in err.lower():
-                answer = "**Error:** Connection timed out. Check your internet and try again."
-            else:
-                answer = f"**Error calling Groq API:** {err}\n\nTry switching to mobile hotspot or use a VPN."
-            confidence = 0
-            syllabus_note = "❌ API call failed — see answer box for details."
-    else:
-        answer = (
-            f"**No API Key Provided**\n\n"
-            f"To get real answers for your question about **{topic}** in **{subject}**, "
-            f"please enter your Groq API key in the field at the top of the app.\n\n"
-            f"**How to get a free key:**\n"
-            f"1. Go to https://console.groq.com\n"
-            f"2. Sign up and click 'API Keys' → 'Create API Key'\n"
-            f"3. Copy and paste it into the 'API Key' field above\n\n"
-            f"Once added, click 'Resolve Doubt' again for a real AI answer!"
-        )
+    prompt = (
+        f'You are an expert academic tutor for "{subject}", topic "{topic}".\n'
+        f"Level: {level} — {LEVEL_PROMPTS[level]}{syl_section}\n\n"
+        f"STUDENT QUESTION: {question}\n\n"
+        "Reply with this structure:\n"
+        "**Understanding the question:** [restate clearly]\n"
+        "**Core Explanation:** [detailed explanation]\n"
+        "**Step-by-step:** [numbered steps]\n"
+        "**Example:** [concrete example]\n"
+        "**Key Takeaway:** [one-sentence summary]\n\n"
+        "Be syllabus-aligned. Do not mention yourself or these instructions."
+    )
+    try:
+        answer = call_groq(api_key.strip(), prompt)
+        confidence = random.randint(85, 97) if has_syllabus else random.randint(75, 88)
+        note = ("✅  Answer grounded in your syllabus." if has_syllabus
+                else "✅  Answered by Groq AI — upload syllabus for better accuracy.")
+    except Exception as e:
+        err = str(e)
+        if "401" in err:
+            answer = "**Error:** Invalid API key. Please check your Groq API key."
+        elif "429" in err or "rate" in err.lower():
+            answer = "**Error:** Rate limit hit. Please wait a moment and try again."
+        elif "403" in err:
+            answer = ("**Network Blocked (403)**\n\n"
+                      "Your network is blocking Groq API.\n\n"
+                      "Fixes:\n"
+                      "1. Switch to mobile hotspot\n"
+                      "2. Use a VPN\n"
+                      "3. Disable firewall/antivirus temporarily")
+        elif "timeout" in err.lower():
+            answer = "**Timeout:** Check your internet connection and try again."
+        else:
+            answer = f"**API Error:** {err}\n\nTry switching to mobile hotspot."
         confidence = 0
-        syllabus_note = "⚠️ Enter your Groq API key above to activate AI responses."
+        note = "❌  API call failed — see answer box for details."
 
     return {
-        "answer":        answer,
-        "confidence":    confidence,
-        "syllabus_note": syllabus_note,
-        "subject":       subject,
-        "topic":         topic,
-        "level":         level,
-        "timestamp":     datetime.now().strftime("%H:%M:%S"),
+        "answer": answer, "confidence": confidence, "note": note,
+        "subject": subject, "topic": topic, "level": level,
+        "question": question,
+        "timestamp": datetime.now().strftime("%I:%M %p"),
     }
 
 
-# ─────────────────────────────────────────────────────────────────
-#  COLOR PALETTE
-# ─────────────────────────────────────────────────────────────────
-COLORS = {
-    "bg":          "#0F1117",
-    "surface":     "#1A1D27",
-    "surface2":    "#22263A",
-    "accent":      "#6C63FF",
-    "accent2":     "#00D4AA",
-    "accent3":     "#FF6B6B",
-    "text":        "#E8EAF6",
-    "text_muted":  "#7B82A8",
-    "success":     "#00C896",
-    "warning":     "#FFB347",
-    "error":       "#FF5757",
-    "border":      "#2E3250",
-}
-
-
-# ─────────────────────────────────────────────────────────────────
+# ═════════════════════════════════════════════════════════════════
 #  MAIN APP
-# ─────────────────────────────────────────────────────────────────
-class DoubtResolverApp(tk.Tk):
+# ═════════════════════════════════════════════════════════════════
+class App(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("🎓 AI Doubt Resolver — Learning Assistant")
-        self.geometry("1100x750")
-        self.minsize(900, 640)
-        self.configure(bg=COLORS["bg"])
+        self.title("Doubt Defuser — Our Hackathon Team")
+        self.geometry("1280x800")
+        self.minsize(1020, 660)
+        self.configure(bg=C["bg"])
 
-        self.syllabus_text  = ""
-        self.history        = []          # list of response dicts
-        self.student_id_var = tk.StringVar()
-        self.api_key_var    = tk.StringVar(value="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")
-        self.subject_var    = tk.StringVar(value="Elements of Mechanical Engineering")
-        self.topic_var      = tk.StringVar(value="Algebra")
-        self.level_var      = tk.StringVar(value="Intermediate")
+        self.syllabus_text = ""
+        self.history       = []
+        self.api_key_var   = tk.StringVar(value=GROQ_API_KEY)
+        self.subject_var   = tk.StringVar(value=list(SUBJECT_TOPICS.keys())[0])
+        self.topic_var     = tk.StringVar()
+        self.level_var     = tk.StringVar(value="Intermediate")
+        self._spinning     = False
 
-        self._build_ui()
+        self._styles()
+        self._header()
+        self._body()
+        self._statusbar()
         self._refresh_topics()
 
-    # ── UI CONSTRUCTION ──────────────────────────────────────────
+    # ─────────────────────────────────────────────────────────────
+    def _styles(self):
+        s = ttk.Style(self)
+        s.theme_use("clam")
+        s.configure("CB.TCombobox",
+            fieldbackground=C["input"], background=C["input"],
+            foreground=C["text"], selectbackground=C["accent"],
+            selectforeground=C["white"], arrowcolor=C["text2"],
+            borderwidth=0, relief="flat", padding=7)
+        s.map("CB.TCombobox",
+            fieldbackground=[("readonly", C["input"])],
+            foreground=[("readonly", C["text"])])
+        s.configure("Dark.Vertical.TScrollbar",
+            troughcolor=C["card"], background=C["border"],
+            borderwidth=0, arrowsize=13,
+            arrowcolor=C["text2"], relief="flat")
+        s.map("Dark.Vertical.TScrollbar",
+            background=[("active", C["accent"]), ("pressed", C["accent_dark"])],
+            arrowcolor=[("active", C["white"])])
+        s.configure("PB.Horizontal.TProgressbar",
+            troughcolor=C["input"], background=C["accent"],
+            borderwidth=0, thickness=7)
 
-    def _build_ui(self):
-        self._build_header()
-        main = tk.Frame(self, bg=COLORS["bg"])
-        main.pack(fill="both", expand=True, padx=16, pady=(0, 16))
+    # ─────────────────────────────────────────────────────────────
+    def _header(self):
+        h = tk.Frame(self, bg=C["accent_dark"], height=62)
+        h.pack(fill="x")
+        h.pack_propagate(False)
+
+        # Left
+        lf = tk.Frame(h, bg=C["accent_dark"])
+        lf.pack(side="left", padx=18, pady=10)
+        tk.Label(lf, text="🎓", font=(FF, 20), bg=C["accent_dark"],
+                 fg=C["white"]).pack(side="left")
+        tk.Label(lf, text="  Doubt Defuser",
+                 font=(FF, 16, "bold"), bg=C["accent_dark"],
+                 fg=C["white"]).pack(side="left")
+        tk.Label(lf, text="  ·  Our Hackathon Team",
+                 font=(FF, 10), bg=C["accent_dark"],
+                 fg=C["accent_light"]).pack(side="left")
+
+        # Right — API key
+        rf = tk.Frame(h, bg=C["accent_dark"])
+        rf.pack(side="right", padx=18, pady=10)
+
+        tk.Label(rf, text="🔑  API Key",
+                 font=(FF, 9), bg=C["accent_dark"],
+                 fg=C["accent_light"]).pack(side="left", padx=(0, 8))
+
+        self._api_e = tk.Entry(rf, textvariable=self.api_key_var,
+                               font=(FF, 9), width=36, show="•",
+                               bg="#3D2FA0", fg=C["white"],
+                               insertbackground=C["white"],
+                               relief="flat", bd=0,
+                               highlightthickness=1,
+                               highlightbackground=C["accent_light"],
+                               highlightcolor=C["white"])
+        self._api_e.pack(side="left", ipady=6, padx=(0, 6))
+
+        def toggle():
+            self._api_e.config(
+                show="" if self._api_e.cget("show") == "•" else "•")
+
+        tk.Button(rf, text="👁", command=toggle,
+                  bg=C["accent"], fg=C["white"], font=(FF, 9),
+                  relief="flat", bd=0, cursor="hand2",
+                  activebackground=C["accent_light"],
+                  padx=8, pady=4).pack(side="left")
+
+    # ─────────────────────────────────────────────────────────────
+    def _body(self):
+        body = tk.Frame(self, bg=C["bg"])
+        body.pack(fill="both", expand=True)
+
+        # Sidebar
+        sb = tk.Frame(body, bg=C["sidebar"], width=300)
+        sb.pack(side="left", fill="y")
+        sb.pack_propagate(False)
+        self._sidebar(sb)
+
+        # Separator
+        tk.Frame(body, bg=C["border"], width=1).pack(side="left", fill="y")
+
+        # Main
+        main = tk.Frame(body, bg=C["bg"])
+        main.pack(side="left", fill="both", expand=True)
+        self._main(main)
+
+    # ─────────────────────────────────────────────────────────────
+    def _sidebar(self, sb):
+        pad = tk.Frame(sb, bg=C["sidebar"])
+        pad.pack(fill="both", expand=True, padx=14, pady=14)
+
+        # ── Settings ─────────────────────────────────────────────
+        self._sec(pad, "⚙  Context Settings")
+        s1 = self._card(pad)
+        self._field(s1, "Subject", self.subject_var,
+                    list(SUBJECT_TOPICS.keys()),
+                    lambda e: self._refresh_topics())
+        tk.Frame(s1, bg=C["input"], height=1).pack(fill="x", pady=8)
+        self._field(s1, "Topic", self.topic_var, [])
+        tk.Frame(s1, bg=C["input"], height=1).pack(fill="x", pady=8)
+        self._field(s1, "Explanation Level", self.level_var,
+                    list(LEVEL_PROMPTS.keys()))
+
+        # Level quick-select pills
+        pills = tk.Frame(s1, bg=C["card"])
+        pills.pack(fill="x", pady=(8, 0))
+        pill_data = [
+            ("Beginner",     "#065F46", "#34D399"),
+            ("Intermediate", "#78350F", "#FBBF24"),
+            ("Advanced",     "#7F1D1D", "#F87171"),
+        ]
+        for lvl, bg, fg in pill_data:
+            f = tk.Frame(pills, bg=bg, padx=8, pady=3)
+            f.pack(side="left", padx=(0, 5))
+            l = tk.Label(f, text=lvl, font=(FF, 7, "bold"), bg=bg, fg=fg,
+                         cursor="hand2")
+            l.pack()
+            l.bind("<Button-1>", lambda e, v=lvl: self.level_var.set(v))
+            f.bind("<Button-1>", lambda e, v=lvl: self.level_var.set(v))
+
+        tk.Frame(pad, bg=C["sidebar"], height=12).pack(fill="x")
+
+        # ── Syllabus ─────────────────────────────────────────────
+        self._sec(pad, "📄  Syllabus / Notes")
+        s2 = self._card(pad)
+
+        self.syl_status = tk.Label(s2,
+            text="No material uploaded",
+            font=(FF, 8), fg=C["text2"], bg=C["card"],
+            anchor="w", wraplength=240)
+        self.syl_status.pack(fill="x", pady=(0, 8))
+
+        br = tk.Frame(s2, bg=C["card"])
+        br.pack(fill="x")
+        self._btn(br, "📂  Upload File",
+                  self._upload_syllabus, "#065F46").pack(side="left", padx=(0,6))
+        self._btn(br, "✏️  Paste Text",
+                  self._paste_dialog, C["input"]).pack(side="left")
+
+        self.syl_prev = tk.Text(s2, height=5, font=("Consolas", 7),
+            bg=C["input"], fg=C["text2"],
+            relief="flat", bd=0, wrap="word",
+            state="disabled", padx=8, pady=6,
+            highlightthickness=0)
+        self.syl_prev.pack(fill="x", pady=(8, 0))
+
+        tk.Frame(pad, bg=C["sidebar"], height=12).pack(fill="x")
+
+        # ── History ──────────────────────────────────────────────
+        self._sec(pad, "🕘  Session History")
+        s3 = self._card(pad, expand=True)
+
+        self.hist_lb = tk.Listbox(s3,
+            font=(FF, 8), bg=C["input"], fg=C["text"],
+            selectbackground=C["accent"], selectforeground=C["white"],
+            relief="flat", bd=0, activestyle="none",
+            highlightthickness=0, height=8)
+        self.hist_lb.pack(fill="both", expand=True)
+        self.hist_lb.bind("<<ListboxSelect>>", self._load_hist)
+
+        tk.Frame(s3, bg=C["card"], height=8).pack()
+        self._btn(s3, "🗑  Clear History",
+                  self._clear_hist, C["input"]).pack(anchor="w")
+
+    # ─────────────────────────────────────────────────────────────
+    def _main(self, main):
+        main.rowconfigure(1, weight=1)
         main.columnconfigure(0, weight=1)
-        main.columnconfigure(1, weight=2)
-        main.rowconfigure(0, weight=1)
 
-        self._build_left_panel(main)
-        self._build_right_panel(main)
-        self._build_status_bar()
+        # ── Question Area ─────────────────────────────────────────
+        top = tk.Frame(main, bg=C["bg"])
+        top.grid(row=0, column=0, sticky="ew", padx=18, pady=(16, 8))
+        top.columnconfigure(0, weight=1)
 
-    def _build_header(self):
-        hdr = tk.Frame(self, bg=COLORS["accent"], height=56)
-        hdr.pack(fill="x")
-        hdr.pack_propagate(False)
+        self._sec(top, "❓  Ask Your Doubt", inline=True)
 
-        tk.Label(hdr, text="🎓  AI Doubt Resolver & Learning Assistant",
-                 font=("Segoe UI", 15, "bold"),
-                 bg=COLORS["accent"], fg="white").pack(side="left", padx=20, pady=12)
+        qcard = self._card(top, padx=0, pady=0)
 
-        # PS ID field in header
-        tk.Label(hdr, text="PS ID:", font=("Segoe UI", 10),
-                 bg=COLORS["accent"], fg="white").pack(side="right", padx=(0, 8), pady=12)
-        ps_entry = tk.Entry(hdr, textvariable=self.student_id_var,
-                            font=("Segoe UI", 10), width=14,
-                            bg=COLORS["surface2"], fg=COLORS["text"],
-                            insertbackground=COLORS["text"], relief="flat", bd=4)
-        ps_entry.pack(side="right", pady=12)
-        tk.Label(hdr, text="Student", font=("Segoe UI", 10),
-                 bg=COLORS["accent"], fg="white").pack(side="right", padx=(16, 4), pady=12)
+        self.q_box = tk.Text(qcard, height=4,
+            font=(FF, 11), bg=C["card"], fg=C["text2"],
+            insertbackground=C["text"],
+            relief="flat", bd=0, wrap="word",
+            padx=16, pady=14, highlightthickness=0)
+        self.q_box.pack(fill="x")
+        self.q_box.insert("1.0", "Type your question here…")
+        self.q_box.bind("<FocusIn>",  self._qin)
+        self.q_box.bind("<FocusOut>", self._qout)
+        self.q_box.bind("<Return>",
+                        lambda e: (self._ask(), "break")[1])
 
-        # Gemini API Key field
-        tk.Label(hdr, text="🔑 Groq API Key:", font=("Segoe UI", 10),
-                 bg=COLORS["accent"], fg="white").pack(side="right", padx=(0, 4), pady=12)
-        api_entry = tk.Entry(hdr, textvariable=self.api_key_var,
-                             font=("Segoe UI", 10), width=32, show="*",
-                             bg=COLORS["surface2"], fg=COLORS["text"],
-                             insertbackground=COLORS["text"], relief="flat", bd=4)
-        api_entry.pack(side="right", pady=12)
-        # Toggle show/hide key
-        def toggle_key_vis():
-            api_entry.config(show="" if api_entry.cget("show") == "*" else "*")
-        tk.Button(hdr, text="👁", command=toggle_key_vis,
-                  bg=COLORS["surface2"], fg=COLORS["text"],
-                  relief="flat", bd=0, cursor="hand2", padx=4
-                  ).pack(side="right", pady=12, padx=(0, 8))
+        tk.Frame(qcard, bg=C["border"], height=1).pack(fill="x")
 
-    def _build_left_panel(self, parent):
-        lf = tk.Frame(parent, bg=COLORS["surface"], bd=0)
-        lf.grid(row=0, column=0, sticky="nsew", padx=(0, 8), pady=0)
+        # Toolbar
+        tb = tk.Frame(qcard, bg=C["card2"], pady=10)
+        tb.pack(fill="x", padx=12)
 
-        # ── Section: Context Settings ─────────────────────────
-        self._section_label(lf, "⚙️  Context Settings")
+        # Ask button (custom styled)
+        self._ask_btn_frame = tk.Frame(tb, bg=C["card2"])
+        self._ask_btn_frame.pack(side="left")
+        self.ask_btn = tk.Button(
+            self._ask_btn_frame,
+            text="🚀  Resolve Doubt",
+            command=self._ask,
+            font=(FF, 10, "bold"),
+            bg=C["accent"], fg=C["white"],
+            relief="flat", bd=0,
+            padx=22, pady=8, cursor="hand2",
+            activebackground=C["accent_light"],
+            activeforeground=C["white"])
+        self.ask_btn.pack()
+        self._add_hover(self.ask_btn, C["accent"], C["accent_light"])
 
-        self._labeled_combo(lf, "Subject:", self.subject_var,
-                            list(SUBJECT_TOPICS.keys()),
-                            lambda e: self._refresh_topics())
-        self._labeled_combo(lf, "Topic:", self.topic_var, [])
-        self._labeled_combo(lf, "Explanation Level:", self.level_var,
-                            list(LEVEL_PROMPTS.keys()))
+        self._btn(tb, "🔄  Clear", self._clear_all,
+                  C["input"]).pack(side="left", padx=(10, 0))
 
-        # ── Section: Syllabus Upload ──────────────────────────
-        self._section_label(lf, "📄  Syllabus / Learning Material")
+        self.spin_lbl = tk.Label(tb, text="",
+            font=(FF, 10), fg=C["accent_light"], bg=C["card2"])
+        self.spin_lbl.pack(side="left", padx=12)
 
-        self.syllabus_status = tk.Label(lf, text="No file uploaded",
-                                        font=("Segoe UI", 9), fg=COLORS["text_muted"],
-                                        bg=COLORS["surface"], anchor="w")
-        self.syllabus_status.pack(fill="x", padx=14, pady=(0, 4))
+        # Confidence (right side)
+        cf = tk.Frame(tb, bg=C["card2"])
+        cf.pack(side="right")
 
-        btn_row = tk.Frame(lf, bg=COLORS["surface"])
-        btn_row.pack(fill="x", padx=14, pady=(0, 8))
-        self._btn(btn_row, "📂 Upload File", self._upload_syllabus,
-                  COLORS["accent2"]).pack(side="left", padx=(0, 6))
-        self._btn(btn_row, "✏️ Paste Text", self._paste_syllabus_dialog,
-                  COLORS["surface2"]).pack(side="left")
-
-        self.syllabus_preview = scrolledtext.ScrolledText(
-            lf, height=6, font=("Consolas", 8),
-            bg=COLORS["surface2"], fg=COLORS["text_muted"],
-            insertbackground=COLORS["text"], relief="flat", bd=0,
-            wrap="word", state="disabled")
-        self.syllabus_preview.pack(fill="x", padx=14, pady=(0, 10))
-
-        # ── Section: History ──────────────────────────────────
-        self._section_label(lf, "📜  Session History")
-
-        self.history_list = tk.Listbox(
-            lf, font=("Segoe UI", 8), height=8,
-            bg=COLORS["surface2"], fg=COLORS["text"],
-            selectbackground=COLORS["accent"], selectforeground="white",
-            relief="flat", bd=0, activestyle="none")
-        self.history_list.pack(fill="both", expand=True, padx=14, pady=(0, 8))
-        self.history_list.bind("<<ListboxSelect>>", self._load_history_item)
-
-        self._btn(lf, "🗑️  Clear History", self._clear_history,
-                  COLORS["surface2"]).pack(padx=14, pady=(0, 14), anchor="w")
-
-    def _build_right_panel(self, parent):
-        rf = tk.Frame(parent, bg=COLORS["surface"], bd=0)
-        rf.grid(row=0, column=1, sticky="nsew")
-
-        # ── Question Input ────────────────────────────────────
-        self._section_label(rf, "❓  Ask Your Doubt")
-
-        self.question_box = scrolledtext.ScrolledText(
-            rf, height=4, font=("Segoe UI", 11),
-            bg=COLORS["surface2"], fg=COLORS["text"],
-            insertbackground=COLORS["text"], relief="flat", bd=0,
-            wrap="word")
-        self.question_box.pack(fill="x", padx=14, pady=(0, 6))
-        self.question_box.insert("1.0", "Type your question here…")
-        self.question_box.bind("<FocusIn>",  self._clear_placeholder)
-        self.question_box.bind("<FocusOut>", self._restore_placeholder)
-        self.question_box.bind("<Return>",   lambda e: self._on_ask() or "break")
-
-        ask_row = tk.Frame(rf, bg=COLORS["surface"])
-        ask_row.pack(fill="x", padx=14, pady=(0, 10))
-
-        self.ask_btn = self._btn(ask_row, "🚀  Resolve Doubt", self._on_ask,
-                                 COLORS["accent"], width=18, font_size=11)
-        self.ask_btn.pack(side="left", padx=(0, 10))
-
-        self._btn(ask_row, "🔄 Clear", self._clear_answer,
-                  COLORS["surface2"]).pack(side="left")
-
-        self.spinner_label = tk.Label(ask_row, text="", font=("Segoe UI", 10),
-                                      fg=COLORS["accent2"], bg=COLORS["surface"])
-        self.spinner_label.pack(side="left", padx=10)
-
-        # ── Confidence Bar ────────────────────────────────────
-        conf_row = tk.Frame(rf, bg=COLORS["surface"])
-        conf_row.pack(fill="x", padx=14, pady=(0, 6))
-        tk.Label(conf_row, text="Confidence:", font=("Segoe UI", 9, "bold"),
-                 fg=COLORS["text_muted"], bg=COLORS["surface"]).pack(side="left")
+        tk.Label(cf, text="Confidence",
+                 font=(FF, 8), fg=C["text2"],
+                 bg=C["card2"]).pack(side="left", padx=(0, 8))
         self.conf_var = tk.IntVar(value=0)
-        self.conf_bar = ttk.Progressbar(conf_row, variable=self.conf_var,
-                                        maximum=100, length=200, mode="determinate")
-        self.conf_bar.pack(side="left", padx=8)
-        self.conf_pct_label = tk.Label(conf_row, text="—", font=("Segoe UI", 9, "bold"),
-                                       fg=COLORS["accent2"], bg=COLORS["surface"])
-        self.conf_pct_label.pack(side="left")
+        ttk.Progressbar(cf, variable=self.conf_var,
+                        maximum=100, length=130,
+                        style="PB.Horizontal.TProgressbar"
+                        ).pack(side="left")
+        self.conf_lbl = tk.Label(cf, text="—",
+            font=(FF, 9, "bold"), fg=C["text2"],
+            bg=C["card2"], width=6)
+        self.conf_lbl.pack(side="left", padx=(8, 0))
 
-        self.syllabus_note_label = tk.Label(
-            rf, text="", font=("Segoe UI", 8), fg=COLORS["text_muted"],
-            bg=COLORS["surface"], anchor="w", wraplength=600, justify="left")
-        self.syllabus_note_label.pack(fill="x", padx=14, pady=(0, 4))
+        # ── Answer Area ───────────────────────────────────────────
+        bot = tk.Frame(main, bg=C["bg"])
+        bot.grid(row=1, column=0, sticky="nsew", padx=18, pady=(0, 10))
+        bot.rowconfigure(1, weight=1)
+        bot.columnconfigure(0, weight=1)
 
-        # ── Answer Box ────────────────────────────────────────
-        self._section_label(rf, "💡  Answer")
+        # Note row
+        self.note_lbl = tk.Label(bot, text="",
+            font=(FF, 8), fg=C["text2"], bg=C["bg"],
+            anchor="w", wraplength=900)
+        self.note_lbl.grid(row=0, column=0, sticky="ew", pady=(0, 3))
 
-        self.answer_box = scrolledtext.ScrolledText(
-            rf, font=("Segoe UI", 10),
-            bg=COLORS["surface2"], fg=COLORS["text"],
-            insertbackground=COLORS["text"], relief="flat", bd=0,
-            wrap="word", state="disabled")
-        self.answer_box.pack(fill="both", expand=True, padx=14, pady=(0, 6))
+        self._sec_grid(bot, "💡  Answer", row=0)
 
-        # Text tags for styling inside answer box
-        self.answer_box.tag_configure("bold",    font=("Segoe UI", 10, "bold"), foreground=COLORS["accent2"])
-        self.answer_box.tag_configure("step",    font=("Segoe UI", 10, "bold"), foreground=COLORS["accent"])
-        self.answer_box.tag_configure("warning", foreground=COLORS["warning"])
-        self.answer_box.tag_configure("muted",   foreground=COLORS["text_muted"])
+        acard_outer = tk.Frame(bot,
+            bg=C["card"],
+            highlightthickness=1,
+            highlightbackground=C["border"])
+        acard_outer.grid(row=1, column=0, sticky="nsew")
 
-        export_row = tk.Frame(rf, bg=COLORS["surface"])
-        export_row.pack(fill="x", padx=14, pady=(0, 14))
-        self._btn(export_row, "💾 Export Session", self._export_session,
-                  COLORS["accent2"]).pack(side="left", padx=(0, 8))
-        self._btn(export_row, "📋 Copy Answer", self._copy_answer,
-                  COLORS["surface2"]).pack(side="left")
+        # Answer box with custom dark scrollbar
+        ans_frame = tk.Frame(acard_outer, bg=C["card"])
+        ans_frame.pack(fill="both", expand=True)
 
-    def _build_status_bar(self):
-        sb = tk.Frame(self, bg=COLORS["surface2"], height=26)
+        self.ans_box = tk.Text(
+            ans_frame,
+            font=(FF, 10),
+            bg=C["card"], fg=C["text"],
+            insertbackground=C["text"],
+            relief="flat", bd=0, wrap="word",
+            state="disabled",
+            padx=18, pady=16,
+            highlightthickness=0)
+        self.ans_box.pack(side="left", fill="both", expand=True)
+
+        ans_scroll = ttk.Scrollbar(ans_frame, orient="vertical",
+                                   style="Dark.Vertical.TScrollbar",
+                                   command=self.ans_box.yview)
+        ans_scroll.pack(side="right", fill="y")
+        self.ans_box.configure(yscrollcommand=ans_scroll.set)
+
+        self.ans_box.tag_configure("h",
+            font=(FF, 10, "bold"), foreground=C["accent_light"],
+            spacing1=10, spacing3=2)
+        self.ans_box.tag_configure("b",
+            font=(FF, 10), foreground=C["text"], spacing3=1)
+        self.ans_box.tag_configure("m",
+            font=(FF, 10, "italic"), foreground=C["text2"])
+        self.ans_box.tag_configure("w",
+            foreground=C["yellow"])
+
+        tk.Frame(acard_outer, bg=C["border"], height=1).pack(fill="x")
+        ft = tk.Frame(acard_outer, bg=C["card2"], pady=8)
+        ft.pack(fill="x", padx=12)
+
+        self._btn(ft, "💾  Export Session",
+                  self._export, "#065F46").pack(side="left", padx=(0, 8))
+        self._btn(ft, "📋  Copy Answer",
+                  self._copy, C["input"]).pack(side="left")
+
+    # ─────────────────────────────────────────────────────────────
+    def _statusbar(self):
+        sb = tk.Frame(self, bg=C["sidebar"], height=28)
         sb.pack(fill="x", side="bottom")
         sb.pack_propagate(False)
-        self.status_var = tk.StringVar(value="Ready — enter your doubt above and click Resolve.")
+        self.status_var = tk.StringVar(
+            value="Ready — type your question and click Resolve Doubt")
         tk.Label(sb, textvariable=self.status_var,
-                 font=("Segoe UI", 8), fg=COLORS["text_muted"],
-                 bg=COLORS["surface2"], anchor="w").pack(side="left", padx=12)
-        tk.Label(sb, text="v2.0  |  Powered by Groq (Llama 3)",
-                 font=("Segoe UI", 8), fg=COLORS["border"],
-                 bg=COLORS["surface2"]).pack(side="right", padx=12)
+                 font=(FF, 8), fg=C["text2"],
+                 bg=C["sidebar"], anchor="w").pack(side="left", padx=14)
+        tk.Label(sb, text="v3.0  ·  Groq Llama 3.3 70B",
+                 font=(FF, 8), fg=C["text3"],
+                 bg=C["sidebar"]).pack(side="right", padx=14)
 
     # ── WIDGET HELPERS ────────────────────────────────────────────
+    def _sec(self, p, text, inline=False):
+        tk.Label(p, text=text,
+                 font=(FF, 9, "bold"),
+                 fg=C["accent_light"], bg=p["bg"],
+                 anchor="w").pack(fill="x", pady=(0, 5))
 
-    def _section_label(self, parent, text):
-        f = tk.Frame(parent, bg=COLORS["border"], height=1)
-        f.pack(fill="x", padx=14, pady=(12, 0))
-        tk.Label(parent, text=text, font=("Segoe UI", 9, "bold"),
-                 fg=COLORS["accent"], bg=COLORS["surface"], anchor="w"
-                 ).pack(fill="x", padx=14, pady=(4, 6))
+    def _sec_grid(self, p, text, row):
+        tk.Label(p, text=text,
+                 font=(FF, 9, "bold"),
+                 fg=C["accent_light"], bg=p["bg"],
+                 anchor="w").grid(row=row, column=0, sticky="w",
+                                  pady=(0, 4))
 
-    def _labeled_combo(self, parent, label, var, values, cmd=None):
-        tk.Label(parent, text=label, font=("Segoe UI", 9),
-                 fg=COLORS["text_muted"], bg=COLORS["surface"], anchor="w"
-                 ).pack(fill="x", padx=14, pady=(0, 1))
-        style = ttk.Style()
-        style.theme_use("clam")
-        style.configure("Dark.TCombobox",
-                         fieldbackground=COLORS["surface2"],
-                         background=COLORS["surface2"],
-                         foreground=COLORS["text"],
-                         selectbackground=COLORS["accent"],
-                         selectforeground="white",
-                         arrowcolor=COLORS["text_muted"])
-        cb = ttk.Combobox(parent, textvariable=var, values=values,
-                          state="readonly", style="Dark.TCombobox",
-                          font=("Segoe UI", 9))
-        cb.pack(fill="x", padx=14, pady=(0, 8))
+    def _card(self, parent, padx=10, pady=8, expand=False):
+        outer = tk.Frame(parent,
+                         bg=C["card"],
+                         highlightthickness=1,
+                         highlightbackground=C["border"])
+        if expand:
+            outer.pack(fill="both", expand=True, pady=(0, 0))
+        else:
+            outer.pack(fill="x", pady=(0, 0))
+        inner = tk.Frame(outer, bg=C["card"],
+                         padx=12 + padx, pady=10 + pady)
+        inner.pack(fill="both", expand=True)
+        return inner
+
+    def _field(self, p, label, var, values, cmd=None):
+        tk.Label(p, text=label,
+                 font=(FF, 8), fg=C["text2"],
+                 bg=C["card"], anchor="w").pack(fill="x", pady=(0, 3))
+        cb = ttk.Combobox(p, textvariable=var, values=values,
+                          state="readonly", style="CB.TCombobox",
+                          font=(FF, 9))
+        cb.pack(fill="x")
         if cmd:
             cb.bind("<<ComboboxSelected>>", cmd)
         return cb
 
-    def _btn(self, parent, text, cmd, color, width=None, font_size=9):
-        kw = dict(text=text, command=cmd,
-                  bg=color, fg="white" if color != COLORS["surface2"] else COLORS["text"],
-                  font=("Segoe UI", font_size, "bold"),
-                  relief="flat", bd=0, padx=12, pady=6, cursor="hand2",
-                  activebackground=COLORS["accent"],
-                  activeforeground="white")
-        if width:
-            kw["width"] = width
-        btn = tk.Button(parent, **kw)
-        return btn
+    def _btn(self, p, text, cmd, color, **kw):
+        b = tk.Button(p, text=text, command=cmd,
+                      font=(FF, 8, "bold"),
+                      bg=color, fg=C["white"],
+                      relief="flat", bd=0,
+                      padx=12, pady=6,
+                      cursor="hand2",
+                      activebackground=C["accent"],
+                      activeforeground=C["white"], **kw)
+        return b
+
+    def _add_hover(self, widget, normal_bg, hover_bg):
+        widget.bind("<Enter>",
+                    lambda e: widget.configure(bg=hover_bg))
+        widget.bind("<Leave>",
+                    lambda e: widget.configure(bg=normal_bg))
 
     # ── LOGIC ─────────────────────────────────────────────────────
-
     def _refresh_topics(self, *_):
-        subj   = self.subject_var.get()
-        topics = SUBJECT_TOPICS.get(subj, [])
-        # find combo for topic and update
-        for w in self.winfo_children():
-            pass  # we use variable directly
+        topics = SUBJECT_TOPICS.get(self.subject_var.get(), [])
         self.topic_var.set(topics[0] if topics else "")
 
-    def _clear_placeholder(self, e):
-        if self.question_box.get("1.0", "end-1c") == "Type your question here…":
-            self.question_box.delete("1.0", "end")
-            self.question_box.configure(fg=COLORS["text"])
+    def _qin(self, e):
+        if self.q_box.get("1.0", "end-1c") == "Type your question here…":
+            self.q_box.delete("1.0", "end")
+            self.q_box.configure(fg=C["text"])
 
-    def _restore_placeholder(self, e):
-        if not self.question_box.get("1.0", "end-1c").strip():
-            self.question_box.insert("1.0", "Type your question here…")
-            self.question_box.configure(fg=COLORS["text_muted"])
+    def _qout(self, e):
+        if not self.q_box.get("1.0", "end-1c").strip():
+            self.q_box.insert("1.0", "Type your question here…")
+            self.q_box.configure(fg=C["text2"])
 
-    def _on_ask(self):
-        question = self.question_box.get("1.0", "end-1c").strip()
-        if not question or question == "Type your question here…":
-            messagebox.showwarning("No Question", "Please type a question first.")
+    def _ask(self):
+        q = self.q_box.get("1.0", "end-1c").strip()
+        if not q or q == "Type your question here…":
+            messagebox.showwarning("No Question",
+                                   "Please type your question first.")
             return
-        ps_id = self.student_id_var.get().strip()
-        if not ps_id:
-            messagebox.showwarning("PS ID Required", "Please enter your PS ID in the header.")
-            return
-
-        self.ask_btn.configure(state="disabled")
-        self._set_answer("⏳ Resolving your doubt…", muted=True)
-        self.status_var.set("Processing…")
-        self._start_spinner()
+        self.ask_btn.configure(state="disabled", bg=C["input"])
+        self._set_ans("")
+        self.conf_var.set(0)
+        self.conf_lbl.configure(text="—", fg=C["text2"])
+        self.note_lbl.configure(text="")
+        self.status_var.set("⏳  AI is thinking…")
+        self._spin_start()
 
         def worker():
-            result = mock_ai_response(
-                question,
-                self.subject_var.get(),
-                self.topic_var.get(),
-                self.level_var.get(),
-                self.syllabus_text,
-                self.api_key_var.get(),
-            )
-            self.after(0, lambda: self._display_result(question, result))
+            result = get_ai_answer(
+                q, self.subject_var.get(), self.topic_var.get(),
+                self.level_var.get(), self.syllabus_text,
+                self.api_key_var.get())
+            self.after(0, lambda: self._show(q, result))
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def _display_result(self, question, result):
-        self._stop_spinner()
-        self.ask_btn.configure(state="normal")
+    def _show(self, question, r):
+        self._spin_stop()
+        self.ask_btn.configure(state="normal", bg=C["accent"])
 
-        # Confidence bar
-        c = result["confidence"]
+        c = r["confidence"]
         self.conf_var.set(c)
-        color = COLORS["success"] if c >= 80 else COLORS["warning"] if c >= 60 else COLORS["error"]
-        self.conf_pct_label.configure(text=f"{c}%", fg=color)
-        self.syllabus_note_label.configure(text=result["syllabus_note"])
+        col = C["green"] if c >= 80 else C["yellow"] if c >= 50 else C["red"]
+        self.conf_lbl.configure(text=f"{c}%", fg=col)
+        self.note_lbl.configure(text=r["note"])
 
-        # Answer display
-        self.answer_box.configure(state="normal")
-        self.answer_box.delete("1.0", "end")
-        for line in result["answer"].split("\n"):
-            if line.startswith("**") and line.endswith("**"):
-                self.answer_box.insert("end", line.strip("*") + "\n", "step")
-            elif "**" in line:
-                parts = line.split("**")
+        self.ans_box.configure(state="normal")
+        self.ans_box.delete("1.0", "end")
+        for line in r["answer"].split("\n"):
+            s = line.strip()
+            if s.startswith("**") and s.endswith("**") and s.count("**") == 2:
+                self.ans_box.insert("end", s.strip("*") + "\n", "h")
+            elif "**" in s:
+                parts = s.split("**")
                 for i, p in enumerate(parts):
-                    self.answer_box.insert("end", p, "bold" if i % 2 == 1 else "")
-                self.answer_box.insert("end", "\n")
-            elif "⚠️" in line or "Limitations" in line:
-                self.answer_box.insert("end", line + "\n", "warning")
+                    self.ans_box.insert("end", p, "h" if i % 2 == 1 else "b")
+                self.ans_box.insert("end", "\n")
+            elif s.lower().startswith("error") or "❌" in s:
+                self.ans_box.insert("end", s + "\n", "w")
+            elif s == "":
+                self.ans_box.insert("end", "\n")
             else:
-                self.answer_box.insert("end", line + "\n")
-        self.answer_box.configure(state="disabled")
+                self.ans_box.insert("end", s + "\n", "b")
+        self.ans_box.configure(state="disabled")
 
-        # History
-        entry = {**result, "question": question}
-        self.history.append(entry)
-        short_q = question[:48] + ("…" if len(question) > 48 else "")
-        self.history_list.insert("end", f"[{result['timestamp']}] {short_q}")
+        self.history.append(r)
+        short = question[:44] + ("…" if len(question) > 44 else "")
+        self.hist_lb.insert("end", f"  {r['timestamp']}   {short}")
         self.status_var.set(
-            f"✅  Answered — {result['subject']} → {result['topic']}  |  "
-            f"Confidence: {result['confidence']}%  |  PS ID: {self.student_id_var.get()}"
-        )
+            f"✅  {r['subject']}  →  {r['topic']}  "
+            f"│  Confidence: {c}%  │  {r['timestamp']}")
 
-    def _load_history_item(self, e):
-        sel = self.history_list.curselection()
+    def _load_hist(self, e):
+        sel = self.hist_lb.curselection()
         if not sel or sel[0] >= len(self.history):
             return
         item = self.history[sel[0]]
@@ -555,217 +632,340 @@ class DoubtResolverApp(tk.Tk):
         self.topic_var.set(item["topic"])
         self.level_var.set(item["level"])
         self.conf_var.set(item["confidence"])
-        self.conf_pct_label.configure(text=f"{item['confidence']}%")
-        self.syllabus_note_label.configure(text=item["syllabus_note"])
+        col = C["green"] if item["confidence"] >= 80 else C["yellow"] if item["confidence"] >= 50 else C["red"]
+        self.conf_lbl.configure(text=f"{item['confidence']}%", fg=col)
+        self.note_lbl.configure(text=item["note"])
+        self.q_box.delete("1.0", "end")
+        self.q_box.insert("1.0", item["question"])
+        self.q_box.configure(fg=C["text"])
+        self.ans_box.configure(state="normal")
+        self.ans_box.delete("1.0", "end")
+        self.ans_box.insert("end", item["answer"])
+        self.ans_box.configure(state="disabled")
 
-        self.answer_box.configure(state="normal")
-        self.answer_box.delete("1.0", "end")
-        self.answer_box.insert("end", item["answer"])
-        self.answer_box.configure(state="disabled")
-
-        self.question_box.delete("1.0", "end")
-        self.question_box.insert("1.0", item["question"])
-        self.question_box.configure(fg=COLORS["text"])
-
-    def _clear_history(self):
+    def _clear_hist(self):
         self.history.clear()
-        self.history_list.delete(0, "end")
+        self.hist_lb.delete(0, "end")
         self.status_var.set("History cleared.")
 
-    def _clear_answer(self):
-        self.answer_box.configure(state="normal")
-        self.answer_box.delete("1.0", "end")
-        self.answer_box.configure(state="disabled")
+    def _clear_all(self):
+        self._set_ans("")
         self.conf_var.set(0)
-        self.conf_pct_label.configure(text="—")
-        self.syllabus_note_label.configure(text="")
-        self.question_box.delete("1.0", "end")
-        self._restore_placeholder(None)
+        self.conf_lbl.configure(text="—", fg=C["text2"])
+        self.note_lbl.configure(text="")
+        self.q_box.delete("1.0", "end")
+        self._qout(None)
 
     # ── SYLLABUS ──────────────────────────────────────────────────
-
     def _upload_syllabus(self):
         path = filedialog.askopenfilename(
             title="Select Syllabus / Notes",
-            filetypes=[
-                ("All supported", "*.txt *.pdf *.docx"),
-                ("Text files",    "*.txt"),
-                ("PDF files",     "*.pdf"),
-                ("Word files",    "*.docx"),
-                ("All files",     "*.*"),
-            ])
+            filetypes=[("All supported", "*.txt *.pdf *.docx"),
+                       ("Text", "*.txt"), ("PDF", "*.pdf"),
+                       ("Word", "*.docx"), ("All", "*.*")])
         if not path:
             return
         try:
             ext = os.path.splitext(path)[1].lower()
-
             if ext == ".pdf":
-                self.syllabus_text = self._extract_pdf_text(path)
-
+                self.syllabus_text = self._read_pdf(path)
             elif ext == ".docx":
-                self.syllabus_text = self._extract_docx_text(path)
-
+                self.syllabus_text = self._read_docx(path)
             else:
-                # Plain text / fallback
                 with open(path, "r", encoding="utf-8", errors="ignore") as f:
                     self.syllabus_text = f.read()
-
             if not self.syllabus_text.strip():
-                messagebox.showwarning("Empty File",
-                    "Could not extract any text from this file.\n"
-                    "Try saving it as a .txt file and uploading again.")
+                messagebox.showwarning("Empty", "No text found. Try a .txt file.")
                 return
-
-            self._update_syllabus_ui(os.path.basename(path))
-
+            self._update_syl_ui(os.path.basename(path))
+            # Auto-detect topics using AI in background
+            self._detect_topics_async()
         except Exception as ex:
-            messagebox.showerror("Error reading file", str(ex))
+            messagebox.showerror("Error", str(ex))
 
-    def _extract_pdf_text(self, path: str) -> str:
-        """Extract text from PDF — tries PyPDF2, then pdfminer, then pypdf."""
-        # ── Try PyPDF2 ───────────────────────────────────────────
-        try:
-            import PyPDF2
-            text = []
-            with open(path, "rb") as f:
-                reader = PyPDF2.PdfReader(f)
-                for page in reader.pages:
-                    t = page.extract_text()
-                    if t:
-                        text.append(t)
-            if text:
-                return "\n".join(text)
-        except ImportError:
-            pass
+    def _detect_topics_async(self):
+        """Run AI topic detection in background thread."""
+        self.status_var.set("🔍  AI is scanning your syllabus for topics…")
+        self.syl_status.configure(
+            text="🔍  Detecting topics…", fg=C["yellow"])
 
-        # ── Try pypdf (newer fork) ───────────────────────────────
-        try:
-            import pypdf
-            text = []
-            with open(path, "rb") as f:
-                reader = pypdf.PdfReader(f)
-                for page in reader.pages:
-                    t = page.extract_text()
-                    if t:
-                        text.append(t)
-            if text:
-                return "\n".join(text)
-        except ImportError:
-            pass
+        def worker():
+            try:
+                prompt = (
+                    "You are a syllabus analyzer. Read the following document and extract "
+                    "ALL chapter names, topic names, and unit titles present in it.\n\n"
+                    "Return ONLY a JSON array of strings, nothing else. No explanation. No markdown.\n"
+                    "Example: [\"Linked Lists\", \"Binary Trees\", \"Sorting Algorithms\"]\n\n"
+                    f"DOCUMENT:\n{self.syllabus_text[:4000]}"
+                )
+                raw = call_groq(self.api_key_var.get().strip(), prompt)
+                # Parse JSON safely
+                raw = raw.strip()
+                start = raw.find("[")
+                end   = raw.rfind("]") + 1
+                if start != -1 and end > start:
+                    topics = json.loads(raw[start:end])
+                else:
+                    topics = []
+                self.after(0, lambda: self._show_detected_topics(topics))
+            except Exception as ex:
+                self.after(0, lambda: self._show_detected_topics([], error=str(ex)))
 
-        # ── Auto-install PyPDF2 and retry ────────────────────────
-        self.status_var.set("Installing PDF reader (PyPDF2)…")
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _show_detected_topics(self, topics: list, error: str = ""):
+        """Show detected topics as clickable chips in a popup window."""
+        words = len(self.syllabus_text.split())
+
+        if error or not topics:
+            self.syl_status.configure(
+                text=f"✅  Loaded ({words:,} words) — topic scan failed",
+                fg=C["yellow"])
+            self.status_var.set("⚠️  Could not detect topics automatically.")
+            return
+
+        # Update status
+        self.syl_status.configure(
+            text=f"✅  Loaded ({words:,} words) — {len(topics)} topics found",
+            fg=C["green"])
+        self.status_var.set(
+            f"✅  Syllabus scanned — {len(topics)} topics detected by AI!")
+
+        # ── Popup window ────────────────────────────────────────
+        win = tk.Toplevel(self)
+        win.title("📚 Topics Detected in Syllabus")
+        win.geometry("640x500")
+        win.configure(bg=C["card"])
+        win.grab_set()
+        win.resizable(True, True)
+
+        # Header
+        hdr = tk.Frame(win, bg=C["accent_dark"], height=54)
+        hdr.pack(fill="x")
+        hdr.pack_propagate(False)
+        tk.Label(hdr, text="📚  Topics Found in Your Syllabus",
+                 font=(FF, 13, "bold"),
+                 bg=C["accent_dark"], fg=C["white"]
+                 ).pack(side="left", padx=18, pady=14)
+        tk.Label(hdr, text=f"{len(topics)} topics",
+                 font=(FF, 10),
+                 bg=C["accent_dark"], fg=C["accent_light"]
+                 ).pack(side="right", padx=18)
+
+        # Subtitle
+        tk.Label(win,
+                 text="Click any topic to set it as your current topic, then ask your doubt!",
+                 font=(FF, 9), fg=C["text2"], bg=C["card"]
+                 ).pack(padx=18, pady=(10, 4), anchor="w")
+
+        tk.Frame(win, bg=C["border"], height=1).pack(fill="x", padx=18)
+
+        # Scrollable chips area
+        canvas = tk.Canvas(win, bg=C["card"], highlightthickness=0)
+        scrollbar = ttk.Scrollbar(win, orient="vertical",
+                                  command=canvas.yview)
+        canvas.configure(yscrollcommand=scrollbar.set)
+        scrollbar.pack(side="right", fill="y", padx=(0, 6), pady=8)
+        canvas.pack(fill="both", expand=True, padx=18, pady=8)
+
+        chip_frame = tk.Frame(canvas, bg=C["card"])
+        canvas_win = canvas.create_window((0, 0), window=chip_frame, anchor="nw")
+
+        def on_resize(e):
+            canvas.itemconfig(canvas_win, width=e.width)
+        canvas.bind("<Configure>", on_resize)
+
+        chip_frame.bind("<Configure>",
+            lambda e: canvas.configure(
+                scrollregion=canvas.bbox("all")))
+
+        # Draw chips in a flowing grid (4 per row)
+        selected_var = tk.StringVar(value="")
+
+        def make_chip(parent, text, idx):
+            colors = [
+                ("#1E3A5F", "#60A5FA"),
+                ("#1A3A2A", "#34D399"),
+                ("#3B1F5E", "#A78BFA"),
+                ("#3B2A00", "#FBBF24"),
+                ("#3B1818", "#F87171"),
+            ]
+            bg, fg = colors[idx % len(colors)]
+
+            chip = tk.Frame(parent, bg=bg, padx=10, pady=6,
+                            cursor="hand2")
+            lbl = tk.Label(chip, text=f"  {text}  ",
+                           font=(FF, 8, "bold"),
+                           bg=bg, fg=fg, cursor="hand2",
+                           wraplength=130, justify="left")
+            lbl.pack()
+
+            def on_click(t=text):
+                self.topic_var.set(t)
+                selected_var.set(t)
+                # Flash selected
+                chip.configure(bg=C["accent"])
+                lbl.configure(bg=C["accent"], fg=C["white"])
+                self.status_var.set(
+                    f"✅  Topic set to: '{t}' — now ask your doubt!")
+                win.after(300, win.destroy)
+
+            chip.bind("<Button-1>", lambda e, t=text: on_click(t))
+            lbl.bind("<Button-1>",  lambda e, t=text: on_click(t))
+            chip.bind("<Enter>",
+                      lambda e, c=chip, l=lbl, f=fg:
+                      (c.configure(bg=C["accent"]),
+                       l.configure(bg=C["accent"], fg=C["white"])))
+            chip.bind("<Leave>",
+                      lambda e, c=chip, l=lbl, b=bg, f=fg:
+                      (c.configure(bg=b), l.configure(bg=b, fg=f)))
+            return chip
+
+        cols = 3
+        for i, topic in enumerate(topics):
+            row, col = divmod(i, cols)
+            chip = make_chip(chip_frame, topic, i)
+            chip.grid(row=row, column=col, padx=6, pady=5, sticky="ew")
+
+        for c_idx in range(cols):
+            chip_frame.columnconfigure(c_idx, weight=1)
+
+        # Footer
+        tk.Frame(win, bg=C["border"], height=1).pack(fill="x", padx=18)
+        ft = tk.Frame(win, bg=C["card"])
+        ft.pack(fill="x", padx=18, pady=10)
+        tk.Label(ft, text="💡 Tip: These topics are from your syllabus PDF — click one to auto-fill the topic field.",
+                 font=(FF, 8), fg=C["text2"], bg=C["card"],
+                 wraplength=500, justify="left").pack(side="left")
+        self._btn(ft, "✖  Close", win.destroy,
+                  C["input"]).pack(side="right")
+
+    def _read_pdf(self, path):
+        import importlib
+        def _try(name):
+            try:
+                m = importlib.import_module(name)
+                pages = []
+                with open(path, "rb") as f:
+                    for pg in m.PdfReader(f).pages:
+                        t = pg.extract_text()
+                        if t: pages.append(t)
+                return "\n".join(pages) if pages else None
+            except ImportError:
+                return None
+        for mod in ("PyPDF2", "pypdf"):
+            r = _try(mod)
+            if r: return r
+        self.status_var.set("Installing PDF reader…")
         self.update()
-        subprocess.check_call([sys.executable, "-m", "pip", "install",
-                               "PyPDF2", "-q"])
-        import PyPDF2
-        text = []
-        with open(path, "rb") as f:
-            reader = PyPDF2.PdfReader(f)
-            for page in reader.pages:
-                t = page.extract_text()
-                if t:
-                    text.append(t)
-        return "\n".join(text)
+        subprocess.check_call([sys.executable, "-m", "pip",
+                               "install", "PyPDF2", "-q"])
+        return _try("PyPDF2") or ""
 
-    def _extract_docx_text(self, path: str) -> str:
-        """Extract text from .docx file."""
+    def _read_docx(self, path):
+        import importlib
         try:
-            import docx
+            docx = importlib.import_module("docx")
         except ImportError:
             self.status_var.set("Installing python-docx…")
             self.update()
-            subprocess.check_call([sys.executable, "-m", "pip", "install",
-                                   "python-docx", "-q"])
-            import docx
+            subprocess.check_call([sys.executable, "-m", "pip",
+                                   "install", "python-docx", "-q"])
+            docx = importlib.import_module("docx")
         doc = docx.Document(path)
         return "\n".join(p.text for p in doc.paragraphs if p.text.strip())
 
-
-
-    def _paste_syllabus_dialog(self):
+    def _paste_dialog(self):
         win = tk.Toplevel(self)
         win.title("Paste Syllabus / Notes")
-        win.geometry("560x380")
-        win.configure(bg=COLORS["surface"])
-        tk.Label(win, text="Paste your syllabus or notes below:",
-                 font=("Segoe UI", 10, "bold"),
-                 bg=COLORS["surface"], fg=COLORS["text"]).pack(padx=16, pady=(14, 4), anchor="w")
-        txt = scrolledtext.ScrolledText(win, font=("Segoe UI", 9),
-                                        bg=COLORS["surface2"], fg=COLORS["text"],
-                                        insertbackground=COLORS["text"], relief="flat", bd=0)
-        txt.pack(fill="both", expand=True, padx=16, pady=4)
+        win.geometry("580x400")
+        win.configure(bg=C["card"])
+        win.grab_set()
+
+        tk.Label(win, text="📝  Paste your syllabus or notes below",
+                 font=(FF, 11, "bold"),
+                 bg=C["card"], fg=C["text"]).pack(
+                     padx=18, pady=(16, 6), anchor="w")
+
+        txt = scrolledtext.ScrolledText(win, font=(FF, 9),
+            bg=C["input"], fg=C["text"],
+            insertbackground=C["text"], relief="flat", bd=0,
+            padx=10, pady=8, wrap="word", highlightthickness=0)
+        txt.pack(fill="both", expand=True, padx=18, pady=4)
 
         def save():
             self.syllabus_text = txt.get("1.0", "end-1c")
-            self._update_syllabus_ui("Pasted text")
+            self._update_syl_ui("Pasted text")
+            self._detect_topics_async()
             win.destroy()
 
-        self._btn(win, "✅ Save", save, COLORS["accent"]).pack(pady=10)
+        bf = tk.Frame(win, bg=C["card"])
+        bf.pack(pady=12)
+        self._btn(bf, "✅  Save Notes", save,
+                  C["accent"]).pack(side="left", padx=6)
+        self._btn(bf, "✖  Cancel", win.destroy,
+                  C["input"]).pack(side="left")
 
-    def _update_syllabus_ui(self, name):
-        word_count = len(self.syllabus_text.split())
-        self.syllabus_status.configure(
-            text=f"✅ {name}  ({word_count:,} words)", fg=COLORS["success"])
-        self.syllabus_preview.configure(state="normal")
-        self.syllabus_preview.delete("1.0", "end")
-        preview = self.syllabus_text[:500] + ("…" if len(self.syllabus_text) > 500 else "")
-        self.syllabus_preview.insert("1.0", preview)
-        self.syllabus_preview.configure(state="disabled")
-        self.status_var.set(f"Syllabus loaded: {name}")
+    def _update_syl_ui(self, name):
+        words = len(self.syllabus_text.split())
+        self.syl_status.configure(
+            text=f"✅  {name}  ({words:,} words)", fg=C["green"])
+        self.syl_prev.configure(state="normal")
+        self.syl_prev.delete("1.0", "end")
+        self.syl_prev.insert(
+            "1.0", self.syllabus_text[:400] +
+            ("…" if len(self.syllabus_text) > 400 else ""))
+        self.syl_prev.configure(state="disabled")
 
     # ── EXPORT / COPY ─────────────────────────────────────────────
-
-    def _export_session(self):
+    def _export(self):
         if not self.history:
-            messagebox.showinfo("Nothing to export", "No session history yet.")
+            messagebox.showinfo("Empty", "No session history yet.")
             return
         path = filedialog.asksaveasfilename(
             defaultextension=".json",
-            filetypes=[("JSON", "*.json"), ("Text", "*.txt")],
+            filetypes=[("JSON", "*.json")],
             initialfile=f"session_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
         if not path:
             return
         with open(path, "w", encoding="utf-8") as f:
             json.dump(self.history, f, indent=2)
-        messagebox.showinfo("Exported", f"Session saved to:\n{path}")
+        messagebox.showinfo("Saved", f"Session saved to:\n{path}")
 
-    def _copy_answer(self):
-        content = self.answer_box.get("1.0", "end-1c")
+    def _copy(self):
+        content = self.ans_box.get("1.0", "end-1c")
         if content.strip():
             self.clipboard_clear()
             self.clipboard_append(content)
-            self.status_var.set("Answer copied to clipboard.")
+            self.status_var.set("✅  Answer copied to clipboard.")
 
     # ── SPINNER ───────────────────────────────────────────────────
-
-    def _start_spinner(self):
+    def _spin_start(self):
         self._spinning = True
-        frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
-        self._spin_i = 0
-
+        frames = ["⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏"]
+        self._si = 0
         def spin():
             if self._spinning:
-                self.spinner_label.configure(text=f"{frames[self._spin_i % len(frames)]}  Thinking…")
-                self._spin_i += 1
-                self.after(100, spin)
+                self.spin_lbl.configure(
+                    text=f"{frames[self._si % len(frames)]}  AI thinking…")
+                self._si += 1
+                self.after(90, spin)
             else:
-                self.spinner_label.configure(text="")
+                self.spin_lbl.configure(text="")
         spin()
 
-    def _stop_spinner(self):
+    def _spin_stop(self):
         self._spinning = False
 
-    def _set_answer(self, text, muted=False):
-        self.answer_box.configure(state="normal")
-        self.answer_box.delete("1.0", "end")
-        self.answer_box.insert("1.0", text, "muted" if muted else "")
-        self.answer_box.configure(state="disabled")
+    def _set_ans(self, text, muted=False):
+        self.ans_box.configure(state="normal")
+        self.ans_box.delete("1.0", "end")
+        if text:
+            self.ans_box.insert("1.0", text, "m" if muted else "b")
+        self.ans_box.configure(state="disabled")
 
 
-# ─────────────────────────────────────────────────────────────────
-#  ENTRY POINT
-# ─────────────────────────────────────────────────────────────────
+# ═════════════════════════════════════════════════════════════════
 if __name__ == "__main__":
-    app = DoubtResolverApp()
+    app = App()
     app.mainloop()
